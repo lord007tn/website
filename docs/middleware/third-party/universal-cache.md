@@ -27,6 +27,41 @@ import {
 } from '@hono/universal-cache'
 ```
 
+## Default Behavior
+
+Universal Cache uses an in-memory `unstorage` driver by default, with these defaults:
+
+```ts
+const baseDefaults = {
+  base: 'cache',
+  maxAge: 1,
+  staleMaxAge: 0,
+  swr: true,
+  keepPreviousOn5xx: true,
+  revalidateHeader: 'x-cache-revalidate',
+}
+
+const middlewareDefaults = {
+  ...baseDefaults,
+  group: 'hono/handlers',
+  methods: ['GET', 'HEAD'],
+  varies: [],
+}
+
+const functionDefaults = {
+  ...baseDefaults,
+  group: 'hono/functions',
+}
+```
+
+Default key strategy:
+
+- `cacheMiddleware()`: hash of `pathname + search`, plus hashed `varies` header values
+- `cacheFunction()`: hash of serialized function arguments
+- middleware name default: normalized request path (e.g. `/api/items` -> `api:items`)
+- function name default: `fn.name` (fallback: `_`)
+- integrity default: auto-derived hash (middleware by cache namespace, function by function source)
+
 ## Usage
 
 ### Cache route responses
@@ -55,6 +90,38 @@ app.use(
     staleMaxAge: 30,
     swr: true,
   })
+)
+```
+
+### Use storage adapters (via unstorage)
+
+```ts
+import { createStorage } from 'unstorage'
+import redisDriver from 'unstorage/drivers/redis'
+
+app.use(
+  '*',
+  cacheDefaults({
+    storage: createStorage({
+      driver: redisDriver({ url: 'redis://localhost:6379' }),
+    }),
+    maxAge: 60,
+    staleMaxAge: 30,
+    swr: true,
+  })
+)
+```
+
+### Override global defaults per route
+
+```ts
+app.get(
+  '/api/slow/items',
+  cacheMiddleware({
+    config: { maxAge: 300, staleMaxAge: 120 },
+    varies: ['accept-language'],
+  }),
+  (c) => c.json({ ok: true })
 )
 ```
 
@@ -87,6 +154,41 @@ You can also use hooks such as:
 
 for custom logic.
 
+## Options Summary
+
+Base options (`cacheMiddleware` + `cacheFunction`):
+
+- `storage`: custom unstorage instance
+- `base`: storage prefix (default: `cache`)
+- `group`: storage group segment (default middleware: `hono/handlers`, function: `hono/functions`)
+- `name`: cache entry name (default inferred from route/function name)
+- `hash`: custom hash function for default keys/integrity
+- `integrity`: manual integrity value for cache busting
+- `maxAge`: max age in seconds (default: `1`)
+- `staleMaxAge`: stale max age in seconds, `-1` means unlimited stale (default: `0`)
+- `swr`: enable stale-while-revalidate (default: `true`)
+- `keepPreviousOn5xx`: keep previous entry when refresh fails in invalidation paths (default: `true`)
+- `revalidateHeader`: revalidation header name (default: `x-cache-revalidate`)
+
+Middleware-only:
+
+- `config`: request-scoped defaults to apply before route options
+- `methods`: cacheable methods (default: `GET`, `HEAD`)
+- `varies`: request headers to include in key
+- `getKey`: custom request key builder
+- `serialize` / `deserialize`: custom response cache format
+- `validate`: validate cached response entries
+- `shouldBypassCache`: skip cache for matching requests
+- `shouldInvalidateCache`: invalidate entry before refresh
+
+Function-only:
+
+- `getKey`: custom key builder from function args
+- `serialize` / `deserialize`: custom function entry format
+- `validate`: validate cached function entries
+- `shouldBypassCache`: skip cache for matching calls
+- `shouldInvalidateCache`: invalidate entry before refresh
+
 ## Key APIs
 
 ### `cacheMiddleware(options | maxAge)`
@@ -106,6 +208,12 @@ Wraps a function with caching behavior.
 - `createCacheStorage()`
 - `setCacheStorage()` / `getCacheStorage()`
 - `setCacheDefaults()` / `getCacheDefaults()`
+
+## Notes
+
+- Cached route responses drop `set-cookie` and hop-by-hop headers.
+- Responses with `cache-control: no-store` or `no-cache` are not cached.
+- Cached function values should be serializable for your selected storage driver.
 
 ## Links
 
